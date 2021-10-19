@@ -42,8 +42,8 @@ pub trait MatMatMul:
     ) -> OutputStoreSpec;
 
     unsafe fn run(&self, m: usize, n: usize, non_linear: &[FusedSpec]) -> anyhow::Result<()> {
-        let mut scratch = self.allocate_scratch_space();
-        self.run_with_scratch_space(m, n, &mut *scratch, non_linear)
+        //let mut scratch = self.allocate_scratch_space();
+        self.run_with_scratch_space_parallel(m, n, non_linear)
     }
 
     unsafe fn allocate_scratch_space(&self) -> Box<dyn ScratchSpace>;
@@ -311,7 +311,7 @@ where
         let nr = K::nr();
 
         let ctx: ThreadLocalCtx<ScratchStorage<K, TI>, _> =
-            ThreadLocalCtx::new(|| ScratchStorage::new(self.allocate_scratch_space(), &non_linear));
+            ThreadLocalCtx::new(|| ScratchStorage::new(&non_linear));
 
         for ia in 0..m / mr {
             (0..n / nr).into_par_iter().for_each(|ib| {
@@ -336,13 +336,7 @@ where
                 local.scratch().for_border_tile::<K>(&non_linear, m / mr, n / nr);
                 let err = K::kernel(&local.scratch().uspecs());
                 debug_assert_eq!(err, 0, "Kernel return error {}", err);
-                local.scratch().postprocess_tile::<K>(
-                    &non_linear,
-                    m / mr,
-                    n / nr,
-                    m % mr,
-                    n % nr,
-                );
+                local.scratch().postprocess_tile::<K>(&non_linear, m / mr, n / nr, m % mr, n % nr);
             }
         }
 
@@ -358,7 +352,7 @@ where
     TI: Datum + Copy + Add + Mul<Output = TI> + Zero + Debug + 'static + Neg<Output = TI>,
     K: MatMatMulKer<TI> + 'static,
 {
-    pub scratch: Box<dyn ScratchSpace>,
+    scratch: Box<dyn ScratchSpace>,
     phantom: PhantomData<(TI, K)>,
 }
 
@@ -367,7 +361,9 @@ where
     TI: Datum + Copy + Add + Mul<Output = TI> + Zero + Debug + 'static + Neg<Output = TI>,
     K: MatMatMulKer<TI> + 'static,
 {
-    pub unsafe fn new(mut scratch: Box<dyn ScratchSpace>, non_linear: &[FusedSpec]) -> Self {
+    pub unsafe fn new(non_linear: &[FusedSpec]) -> Self {
+        let mut scratch: Box<dyn ScratchSpace> =
+            Box::new(ScratchSpaceFusedNonLinear::<TI>::default());
         let x = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
         x.prepare::<K>(non_linear);
         Self { scratch, phantom: PhantomData }
@@ -377,7 +373,6 @@ where
         self.scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap()
     }
 }
-
 
 impl<K, TI> fmt::Display for MatMatMulImpl<K, TI>
 where
