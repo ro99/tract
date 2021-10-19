@@ -62,6 +62,14 @@ pub trait MatMatMul:
         scratch: &mut dyn ScratchSpace,
         non_linear: &[FusedSpec],
     ) -> anyhow::Result<()>;
+
+    unsafe fn run_with_scratch_space_parallel(
+        &self,
+        m: usize,
+        n: usize,
+        t: usize,
+        non_linear: &[FusedSpec],
+    ) -> anyhow::Result<()>;
 }
 
 dyn_clone::clone_trait_object!(MatMatMul);
@@ -293,6 +301,69 @@ where
         }
         Ok(())
     }
+
+    unsafe fn run_with_scratch_space_parallel(
+        &self,
+        m: usize,
+        n: usize,
+        t: usize,
+        non_linear: &[FusedSpec],
+    ) -> anyhow::Result<()> {
+        let mr = K::mr();
+        let nr = K::nr();
+        let cols: Vec<usize> = (0..m / mr).collect();
+        let mut rows: Vec<usize> = (0..n / nr).collect();
+        let size = rows.len() / t + rows.len() % t;
+
+        crossbeam::scope(|scope| {
+            for ia in cols {
+                for row_chunk in rows.chunks_mut(size) {
+                    let row_chunk = row_chunk.to_owned();
+                    scope.spawn(move |_| {
+                        let mut scratch = self.allocate_scratch_space();
+                        let scratch = scratch
+                            .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
+                            .unwrap();
+                        scratch.prepare::<K>(&non_linear);
+                        for ib in row_chunk {
+                            scratch.for_valid_tile::<K>(&non_linear, ia, ib);
+                            let err = K::kernel(&scratch.uspecs());
+                            debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                        }
+                        if n % nr != 0 {
+                            scratch.for_border_tile::<K>(&non_linear, ia, n / nr);
+                            let err = K::kernel(&scratch.uspecs());
+                            debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                            scratch.postprocess_tile::<K>(&non_linear, ia, n / nr, mr, n % nr);
+                        }
+                    });
+                }
+            }
+            let mut scratch = self.allocate_scratch_space();
+            let scratch = scratch
+                .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
+                .unwrap();
+            scratch.prepare::<K>(&non_linear);
+            if m % mr != 0 {
+                for ib in 0..n / nr {
+                    scratch.for_border_tile::<K>(&non_linear, m / mr, ib);
+                    let err = K::kernel(&scratch.uspecs());
+                    debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                    scratch.postprocess_tile::<K>(&non_linear, m / mr, ib, m % mr, nr);
+                }
+                if n % nr != 0 {
+                    scratch.for_border_tile::<K>(&non_linear, m / mr, n / nr);
+                    let err = K::kernel(&scratch.uspecs());
+                    debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                    scratch.postprocess_tile::<K>(&non_linear, m / mr, n / nr, m % mr, n % nr);
+                }
+            }
+        })
+        .unwrap();
+
+        Ok(())
+    }
+
 }
 
 impl<K, TI> fmt::Display for MatMatMulImpl<K, TI>

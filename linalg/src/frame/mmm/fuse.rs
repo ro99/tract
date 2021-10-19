@@ -49,6 +49,9 @@ pub enum FusedSpec<'t> {
     AddMatMul { k: usize, a: PackedStore, b: InputStore },
 }
 
+unsafe impl Send for FusedSpec<'_>{}
+unsafe impl Sync for FusedSpec<'_>{}
+
 // Careful here, the jump_to comments are used by the build script.
 #[repr(C, usize)]
 #[derive(PartialEq, Copy, Clone, Debug)]
