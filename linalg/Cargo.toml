@@ -25,7 +25,8 @@ log = "0.4.14"
 num-traits = "0.2.14"
 tract-data = { path = "../data" }
 paste = "1.0.5"
-crossbeam = "0.8.1"
+rayon = "1.5.1"
+rayon-tlsctx = "0.2.0"
 
 [build-dependencies]
 cc = "1.0.69"
