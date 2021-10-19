@@ -310,11 +310,23 @@ where
         t: usize,
         non_linear: &[FusedSpec],
     ) -> anyhow::Result<()> {
+
+        if n < 100000 {
+            return self.run_with_scratch_space(m, n, &mut *self.allocate_scratch_space(), &non_linear);
+        }
+
+        if n == 1 && K::nr() == 1 {
+            return self.run_with_scratch_space_vec(m, &mut *self.allocate_scratch_space(), &non_linear);
+        } 
+
+        let t = 8;
+
         let mr = K::mr();
         let nr = K::nr();
         let cols: Vec<usize> = (0..m / mr).collect();
         let mut rows: Vec<usize> = (0..n / nr).collect();
         let size = rows.len() / t + rows.len() % t;
+
 
         crossbeam::scope(|scope| {
             for ia in cols {
@@ -363,6 +375,7 @@ where
         .unwrap();
 
         Ok(())
+
     }
 
 }
