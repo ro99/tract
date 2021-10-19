@@ -42,8 +42,9 @@ pub trait MatMatMul:
     ) -> OutputStoreSpec;
 
     unsafe fn run(&self, m: usize, n: usize, non_linear: &[FusedSpec]) -> anyhow::Result<()> {
-        let mut scratch = self.allocate_scratch_space();
-        self.run_with_scratch_space(m, n, &mut *scratch, non_linear)
+        //let mut scratch = self.allocate_scratch_space();
+        //self.run_with_scratch_space(m, n, &mut *scratch, non_linear)
+        self.run_with_scratch_space_parallel(m, n, 4, non_linear)
     }
 
     unsafe fn allocate_scratch_space(&self) -> Box<dyn ScratchSpace>;

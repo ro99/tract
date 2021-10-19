@@ -236,7 +236,8 @@ fn eval(
                         .wrap(&TensorView::at_prefix_unchecked(&inputs[0], &*b_prefix)),
                 });
                 f.extend(fused.iter().map(|f| f.resolve(inputs, &c_storage, c_store)));
-                op.mmm.run_with_scratch_space(geometry.m, geometry.n, scratch, &f)?;
+                //op.mmm.run_with_scratch_space(geometry.m, geometry.n, scratch, &f)?;
+                op.mmm.run_with_scratch_space_parallel(geometry.m, geometry.n, 4, &f)?;
             }
         } else {
             let (pa, fused) = &*op.micro_ops.as_ptr();
@@ -250,7 +251,8 @@ fn eval(
             for ix in 0..fused.len() {
                 f.push(fused.get_unchecked(ix).resolve(inputs, &c_storage, c_store));
             }
-            op.mmm.run_with_scratch_space(geometry.m, geometry.n, scratch, &f)?;
+            //op.mmm.run_with_scratch_space(geometry.m, geometry.n, scratch, &f)?;
+            op.mmm.run_with_scratch_space_parallel(geometry.m, geometry.n, 4, &f)?;
         }
         c.set_shape_unchecked(c_final_shape);
         Ok(tvec!(c.into_arc_tensor()))
