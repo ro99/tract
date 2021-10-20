@@ -310,33 +310,64 @@ where
         let mr = K::mr();
         let nr = K::nr();
 
-        let ctx: ThreadLocalCtx<ScratchStorage<K, TI>, _> =
-            ThreadLocalCtx::new(|| ScratchStorage::new(&non_linear));
+        let tls = LocalScratch::new();
 
-        for ia in 0..m / mr {
-            (0..n / nr).into_par_iter().for_each(|ib| {
-                let mut local = ctx.get();
-                local.scratch().for_valid_tile::<K>(&non_linear, ia, ib);
-                let err = K::kernel(&local.scratch().uspecs());
-                debug_assert_eq!(err, 0, "Kernel return error {}", err);
-            });
-        }
+        let pool: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
+            .exit_handler(|_| LocalScratch::finish())
+            .build()
+            .unwrap();
+
+        pool.install(|| {
+            for ia in 0..m / mr {
+                (0..n / nr).into_par_iter().for_each(|ib| {
+                    let scratch = tls
+                        .get_or_init(|| {
+                            let mut scratch = self.allocate_scratch_space();
+                            scratch
+                                .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
+                                .unwrap()
+                                .prepare::<K>(non_linear);
+                            scratch
+                        })
+                        .unwrap();
+                    let scratch = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
+                    scratch.for_valid_tile::<K>(&non_linear, ia, ib);
+                    let err = K::kernel(&scratch.uspecs());
+                    debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                });
+            }
+            if m % mr != 0 {
+                (0..n / nr).into_par_iter().for_each(|ib| {
+                    let scratch = tls
+                        .get_or_init(|| {
+                            let mut scratch = self.allocate_scratch_space();
+                            scratch
+                                .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
+                                .unwrap()
+                                .prepare::<K>(non_linear);
+                            scratch
+                        })
+                        .unwrap();
+                    let scratch = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
+                    scratch.for_border_tile::<K>(&non_linear, m / mr, ib);
+                    let err = K::kernel(&scratch.uspecs());
+                    debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                    scratch.postprocess_tile::<K>(&non_linear, m / mr, ib, m % mr, nr);
+                });
+            }
+        });
 
         if m % mr != 0 {
-            (0..n / nr).into_par_iter().for_each(|ib| {
-                let mut local = ctx.get();
-                local.scratch().for_border_tile::<K>(&non_linear, m / mr, ib);
-                let err = K::kernel(&local.scratch().uspecs());
-                debug_assert_eq!(err, 0, "Kernel return error {}", err);
-                local.scratch().postprocess_tile::<K>(&non_linear, m / mr, ib, m % mr, nr);
-            });
-
             if n % nr != 0 {
-                let mut local = ctx.get();
-                local.scratch().for_border_tile::<K>(&non_linear, m / mr, n / nr);
-                let err = K::kernel(&local.scratch().uspecs());
+                let mut scratch = self.allocate_scratch_space();
+                let scratch = scratch
+                    .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
+                    .context("Wrong scratch space type")?;
+                scratch.prepare::<K>(non_linear);
+                scratch.for_border_tile::<K>(&non_linear, m / mr, n / nr);
+                let err = K::kernel(&scratch.uspecs());
                 debug_assert_eq!(err, 0, "Kernel return error {}", err);
-                local.scratch().postprocess_tile::<K>(&non_linear, m / mr, n / nr, m % mr, n % nr);
+                scratch.postprocess_tile::<K>(&non_linear, m / mr, n / nr, m % mr, n % nr);
             }
         }
 
@@ -345,34 +376,6 @@ where
 }
 
 use rayon::prelude::*;
-use rayon_tlsctx::ThreadLocalCtx;
-
-struct ScratchStorage<K, TI>
-where
-    TI: Datum + Copy + Add + Mul<Output = TI> + Zero + Debug + 'static + Neg<Output = TI>,
-    K: MatMatMulKer<TI> + 'static,
-{
-    scratch: Box<dyn ScratchSpace>,
-    phantom: PhantomData<(TI, K)>,
-}
-
-impl<K, TI> ScratchStorage<K, TI>
-where
-    TI: Datum + Copy + Add + Mul<Output = TI> + Zero + Debug + 'static + Neg<Output = TI>,
-    K: MatMatMulKer<TI> + 'static,
-{
-    pub unsafe fn new(non_linear: &[FusedSpec]) -> Self {
-        let mut scratch: Box<dyn ScratchSpace> =
-            Box::new(ScratchSpaceFusedNonLinear::<TI>::default());
-        let x = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
-        x.prepare::<K>(non_linear);
-        Self { scratch, phantom: PhantomData }
-    }
-
-    pub fn scratch(&mut self) -> &mut ScratchSpaceFusedNonLinear<TI> {
-        self.scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap()
-    }
-}
 
 impl<K, TI> fmt::Display for MatMatMulImpl<K, TI>
 where
