@@ -44,7 +44,7 @@ pub trait MatMatMul:
     unsafe fn run(&self, m: usize, n: usize, non_linear: &[FusedSpec]) -> anyhow::Result<()> {
         //let mut scratch = self.allocate_scratch_space();
         //self.run_with_scratch_space(m, n, &mut *scratch, non_linear)
-        self.run_with_scratch_space_parallel(m, n, 4, non_linear)
+        self.run_with_scratch_space_parallel(m, n, 8, non_linear)
     }
 
     unsafe fn allocate_scratch_space(&self) -> Box<dyn ScratchSpace>;
@@ -311,15 +311,13 @@ where
         non_linear: &[FusedSpec],
     ) -> anyhow::Result<()> {
 
-        if n < 100000 {
-            return self.run_with_scratch_space(m, n, &mut *self.allocate_scratch_space(), &non_linear);
-        }
+        //if n < 1000 {
+        //    return self.run_with_scratch_space(m, n, &mut *self.allocate_scratch_space(), &non_linear);
+        //}
 
-        if n == 1 && K::nr() == 1 {
-            return self.run_with_scratch_space_vec(m, &mut *self.allocate_scratch_space(), &non_linear);
-        } 
-
-        let t = 8;
+        //if n == 1 && K::nr() == 1 {
+        //    return self.run_with_scratch_space_vec(m, &mut *self.allocate_scratch_space(), &non_linear);
+        //} 
 
         let mr = K::mr();
         let nr = K::nr();
