@@ -5,21 +5,23 @@ use std::{cell::UnsafeCell, thread::LocalKey};
 
 type ScratchLts = UnsafeCell<Option<Box<dyn ScratchSpace>>>;
 
+thread_local!(
+    static LOCAL_SCRATCH: ScratchLts = UnsafeCell::new(Option::None);
+);
+
 pub struct LocalScratch {
     thread_local: &'static LocalKey<ScratchLts>,
 }
 
 impl LocalScratch {
-    thread_local!(
-        static LOCAL_SCRATCH: ScratchLts = UnsafeCell::new(Option::None);
-    );
+
 
     pub fn new() -> Self {
-        Self { thread_local: &Self::LOCAL_SCRATCH }
+        Self { thread_local: &LOCAL_SCRATCH }
     }
 
     fn unset_local_scratch() {
-        Self::LOCAL_SCRATCH.with(move |e| unsafe {
+        LOCAL_SCRATCH.with(move |e| unsafe {
             *e.get() = None;
         });
     }
