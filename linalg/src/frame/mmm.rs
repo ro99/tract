@@ -9,14 +9,14 @@ mod storage;
 #[cfg(test)]
 #[macro_use]
 pub mod tests;
-mod locals;
+mod local_scratch;
 
 pub use fuse::*;
 pub use kernel::*;
 pub use mmm::*;
 pub use scratch::*;
 pub use storage::*;
-pub use locals::*;
+pub use local_scratch::*;
 
 #[cfg(test)]
 pub use tests::*;

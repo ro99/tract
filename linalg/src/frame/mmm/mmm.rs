@@ -3,6 +3,7 @@ use super::*;
 use crate::frame::Packer;
 use anyhow::Context;
 use num_traits::{AsPrimitive, Zero};
+use rayon::prelude::*;
 use std::fmt;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -314,57 +315,41 @@ where
         let mut rows: Vec<usize> = total.collect();
         let size = rows.len() / 8 + rows.len() % 8;
 
-        let tls = LocalScratch::new();
+        let new_scratch = || {
+            let mut scratch = self.allocate_scratch_space();
+            scratch
+                .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
+                .unwrap()
+                .prepare::<K>(non_linear);
+            scratch
+        };
 
-        locals::POOL.install(|| {
-            for ia in 0..m / mr {
-                rows.par_chunks_mut(size).for_each(|row_chunk|{ 
-                    let row_chunk = row_chunk.to_owned();
-                    let scratch = tls
-                        .get_or_init(|| {
-                            let mut scratch = self.allocate_scratch_space();
-                            scratch
-                                .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
-                                .unwrap()
-                                .prepare::<K>(non_linear);
-                            scratch
-                        })
-                        .unwrap();
-                    let scratch = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
-                    for ib in row_chunk {
-                        scratch.for_valid_tile::<K>(&non_linear, ia, ib);
-                        let err = K::kernel(&scratch.uspecs());
-                        debug_assert_eq!(err, 0, "Kernel return error {}", err);
-                    }
-                    LocalScratch::finish();
-                });
-            }
-            if m % mr != 0 {
-                rows.par_chunks_mut(size).for_each(|row_chunk|{ 
-                    let row_chunk = row_chunk.to_owned();
-                    let scratch = tls
-                        .get_or_init(|| {
-                            let mut scratch = self.allocate_scratch_space();
-                            scratch
-                                .downcast_mut::<ScratchSpaceFusedNonLinear<TI>>()
-                                .unwrap()
-                                .prepare::<K>(non_linear);
-                            scratch
-                        })
-                        .unwrap();
-                    let scratch = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
-                    for ib in row_chunk {
-                        scratch.for_border_tile::<K>(&non_linear, m / mr, ib);
-                        let err = K::kernel(&scratch.uspecs());
-                        debug_assert_eq!(err, 0, "Kernel return error {}", err);
-                        scratch.postprocess_tile::<K>(&non_linear, m / mr, ib, m % mr, nr);
-                    }
-                    LocalScratch::finish();
-                });
-            }
-        });
-
+        for ia in 0..m / mr {
+            rows.par_chunks_mut(size).for_each(|row_chunk| {
+                let row_chunk = row_chunk.to_owned();
+                let scratch = local_scratch::get_or_init(|| new_scratch()).unwrap();
+                let scratch = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
+                for ib in row_chunk {
+                    scratch.for_valid_tile::<K>(&non_linear, ia, ib);
+                    let err = K::kernel(&scratch.uspecs());
+                    debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                }
+                local_scratch::finish();
+            });
+        }
         if m % mr != 0 {
+            rows.par_chunks_mut(size).for_each(|row_chunk| {
+                let row_chunk = row_chunk.to_owned();
+                let scratch = local_scratch::get_or_init(|| new_scratch()).unwrap();
+                let scratch = scratch.downcast_mut::<ScratchSpaceFusedNonLinear<TI>>().unwrap();
+                for ib in row_chunk {
+                    scratch.for_border_tile::<K>(&non_linear, m / mr, ib);
+                    let err = K::kernel(&scratch.uspecs());
+                    debug_assert_eq!(err, 0, "Kernel return error {}", err);
+                    scratch.postprocess_tile::<K>(&non_linear, m / mr, ib, m % mr, nr);
+                }
+                local_scratch::finish();
+            });
             if n % nr != 0 {
                 let mut scratch = self.allocate_scratch_space();
                 let scratch = scratch
@@ -381,8 +366,6 @@ where
         Ok(())
     }
 }
-
-use rayon::prelude::*;
 
 impl<K, TI> fmt::Display for MatMatMulImpl<K, TI>
 where
