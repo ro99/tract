@@ -9,6 +9,10 @@ thread_local!(
     static LOCAL_SCRATCH: ScratchLts = UnsafeCell::new(Option::None);
 );
 
+lazy_static::lazy_static!(
+    pub static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new().build().unwrap();
+);
+
 pub struct LocalScratch {
     thread_local: &'static LocalKey<ScratchLts>,
 }
